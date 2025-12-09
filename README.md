@@ -7,12 +7,14 @@ Migrated from https://github.com/rsgcata/go-cli-command
 
 ## Features
 
-- Simple and intuitive API for defining CLI commands
-- Support for command-line flags with validation
-- Built-in help command that displays available commands and their flags
-- Command locking mechanism to prevent concurrent execution
-- Flexible output handling
-- Minimal dependencies
+- Simple, intuitive API for defining CLI commands
+- First-class support for command-line flags with validation
+- Built-in `help` command that lists commands and their flags with nicely wrapped descriptions
+- File-based command locking to prevent concurrent execution (cross-process safe)
+- Panic-safe command runner with error reporting and non-zero exit codes on failure
+- Flexible output handling via injectable `io.Writer`
+- Minimal dependencies (uses `github.com/golibry/go-fs` for file locking)
+- Small, test-covered core
 
 ## Installation
 
@@ -22,13 +24,13 @@ go get github.com/golibry/go-cli-command
 
 ## Usage
 
-The package provides a straightforward way to create command-line applications:
+Create command-line applications by:
 
-1. Define your commands by implementing the `Command` interface
-2. Register your commands with the `CommandsRegistry`
-3. Bootstrap your application with the provided arguments
+1. Implementing the `Command` interface for each command
+2. Registering your commands in a `CommandsRegistry`
+3. Bootstrapping the application with the provided arguments
 
-For commands without flags, you can embed the `CommandWithoutFlags` struct to avoid implementing empty methods.
+For commands without flags, embed `CommandWithoutFlags` to avoid boilerplate.
 
 ## Documentation
 
@@ -46,26 +48,7 @@ The `Command` interface defines the methods that a command must implement:
 
 #### FsLockableCommand
 
-A helper struct that implements the `Command` interface and provides file-based locking to prevent concurrent execution of commands.
-
-Example usage:
-
-1. Create a new FsLockableCommand for a command with a directory for the lock file:
-   ```
-   lockableCmd := cli.NewLockableCommand(myCommand, os.TempDir())
-   ```
-
-2. Or with a custom lock name:
-   ```
-   lockableCmd := cli.NewLockableCommandWithLockName(myCommand, os.TempDir(), "custom-lock-name")
-   ```
-
-3. Register the helper instead of the original command:
-   ```
-   registry.Register(lockableCmd)
-   ```
-
-The helper uses file locks to ensure that only one instance of the command can run at a time, even across different processes. When a command is locked, the `Exec` method will return a `CommandLocked` error.
+A helper that wraps any `Command` to enforce exclusive execution using a file lock. This ensures only one instance runs at a time, even across processes. When a lock is already held, `Exec` returns the sentinel `CommandLocked` error.
 
 #### CommandWithoutFlags
 
@@ -81,7 +64,7 @@ The main entry point for your CLI application, which processes arguments, runs c
 
 ## Examples
 
-For complete examples of how to use this package, please see the [_examples](/_examples) directory in this repository.
+For complete, runnable examples (including command implementation, registration, bootstrapping, and locking), see the [_examples](/_examples) directory in this repository.
 
 ## License
 
