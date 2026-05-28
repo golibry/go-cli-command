@@ -14,6 +14,12 @@ import (
 const StatusOk = 0
 const StatusErr = 1
 
+var (
+	ErrCommandAlreadyRegistered = errors.New("command already registered")
+	ErrInvalidCommand           = errors.New("invalid command")
+	ErrInvalidCommandsRegistry  = errors.New("invalid commands registry")
+)
+
 // RunResult describes the outcome of processing one CLI invocation.
 type RunResult struct {
 	CommandID string
@@ -120,17 +126,60 @@ func NewCommandsRegistry() *CommandsRegistry {
 	return &CommandsRegistry{make(map[string]Command)}
 }
 
+func isNilCommand(cmd Command) bool {
+	if cmd == nil {
+		return true
+	}
+
+	cmdValue := reflect.ValueOf(cmd)
+	switch cmdValue.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return cmdValue.IsNil()
+	default:
+		return false
+	}
+}
+
 // Register adds a command to the registry
 func (registry *CommandsRegistry) Register(cmd Command) error {
-	if _, exists := registry.commands[cmd.Id()]; exists {
-		return fmt.Errorf("command '%s' is already registered", cmd.Id())
+	if registry == nil {
+		return fmt.Errorf("%w: registry cannot be nil", ErrInvalidCommandsRegistry)
 	}
-	registry.commands[cmd.Id()] = cmd
+
+	if isNilCommand(cmd) {
+		return fmt.Errorf("%w: command cannot be nil", ErrInvalidCommand)
+	}
+
+	cmdId := cmd.Id()
+	trimmedCmdId := strings.TrimSpace(cmdId)
+	if trimmedCmdId == "" {
+		return fmt.Errorf("%w: command id cannot be empty", ErrInvalidCommand)
+	}
+	if trimmedCmdId != cmdId {
+		return fmt.Errorf(
+			"%w: command id %q must not contain leading or trailing whitespace",
+			ErrInvalidCommand,
+			cmdId,
+		)
+	}
+
+	if registry.commands == nil {
+		registry.commands = make(map[string]Command)
+	}
+
+	if _, exists := registry.commands[cmdId]; exists {
+		return fmt.Errorf("%w: command %q", ErrCommandAlreadyRegistered, cmdId)
+	}
+	registry.commands[cmdId] = cmd
 	return nil
 }
 
 // Commands returns a copy of all registered commands
 func (registry *CommandsRegistry) Commands() map[string]Command {
+	if registry == nil {
+		return map[string]Command{}
+	}
+
 	cmdCopy := make(map[string]Command, len(registry.commands))
 	for name, cmd := range registry.commands {
 		cmdCopy[name] = cmd
@@ -140,6 +189,10 @@ func (registry *CommandsRegistry) Commands() map[string]Command {
 
 // OrderedCommands returns all registered commands ordered by command ID.
 func (registry *CommandsRegistry) OrderedCommands() []Command {
+	if registry == nil {
+		return []Command{}
+	}
+
 	commands := make([]Command, 0, len(registry.commands))
 	for _, cmd := range registry.commands {
 		commands = append(commands, cmd)
@@ -156,6 +209,10 @@ func (registry *CommandsRegistry) OrderedCommands() []Command {
 
 // Command returns a command by its ID
 func (registry *CommandsRegistry) Command(id string) (Command, bool) {
+	if registry == nil {
+		return nil, false
+	}
+
 	cmd, ok := registry.commands[id]
 	return cmd, ok
 }

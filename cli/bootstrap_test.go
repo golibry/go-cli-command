@@ -147,8 +147,83 @@ func TestItCanRegisterCommandsWithoutDuplicates(t *testing.T) {
 
 	// Test duplicate registration
 	err = registry.Register(cmd)
-	if err == nil {
-		t.Error("Register() error = nil, want error for duplicate command")
+	if !errors.Is(err, ErrCommandAlreadyRegistered) {
+		t.Errorf("Register() error = %v, want ErrCommandAlreadyRegistered", err)
+	}
+}
+
+func TestItCanRegisterCommandUsingZeroValueRegistry(t *testing.T) {
+	var registry CommandsRegistry
+	cmd := &MockCommand{id: "test-cmd", description: "Test command"}
+
+	err := registry.Register(cmd)
+	if err != nil {
+		t.Errorf("Register() error = %v, want nil", err)
+	}
+
+	if _, exists := registry.Command("test-cmd"); !exists {
+		t.Error("Command() exists = false, want true")
+	}
+}
+
+func TestRegisterRejectsInvalidCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmd     Command
+		wantErr error
+	}{
+		{
+			name:    "nil command",
+			cmd:     nil,
+			wantErr: ErrInvalidCommand,
+		},
+		{
+			name:    "typed nil command",
+			cmd:     (*MockCommand)(nil),
+			wantErr: ErrInvalidCommand,
+		},
+		{
+			name:    "empty command id",
+			cmd:     &MockCommand{id: "", description: "Empty command"},
+			wantErr: ErrInvalidCommand,
+		},
+		{
+			name:    "whitespace command id",
+			cmd:     &MockCommand{id: "   ", description: "Whitespace command"},
+			wantErr: ErrInvalidCommand,
+		},
+		{
+			name:    "leading whitespace command id",
+			cmd:     &MockCommand{id: " test-cmd", description: "Whitespace command"},
+			wantErr: ErrInvalidCommand,
+		},
+		{
+			name:    "trailing whitespace command id",
+			cmd:     &MockCommand{id: "test-cmd ", description: "Whitespace command"},
+			wantErr: ErrInvalidCommand,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(
+			tt.name, func(t *testing.T) {
+				registry := NewCommandsRegistry()
+
+				err := registry.Register(tt.cmd)
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("Register() error = %v, want %v", err, tt.wantErr)
+				}
+			},
+		)
+	}
+}
+
+func TestRegisterRejectsNilRegistry(t *testing.T) {
+	var registry *CommandsRegistry
+
+	err := registry.Register(&MockCommand{id: "test-cmd", description: "Test command"})
+	if !errors.Is(err, ErrInvalidCommandsRegistry) {
+		t.Errorf("Register() error = %v, want ErrInvalidCommandsRegistry", err)
 	}
 }
 
