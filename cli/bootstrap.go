@@ -5,10 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"reflect"
-	"slices"
+	"sort"
 	"strings"
 )
 
@@ -139,6 +138,22 @@ func (registry *CommandsRegistry) Commands() map[string]Command {
 	return cmdCopy
 }
 
+// OrderedCommands returns all registered commands ordered by command ID.
+func (registry *CommandsRegistry) OrderedCommands() []Command {
+	commands := make([]Command, 0, len(registry.commands))
+	for _, cmd := range registry.commands {
+		commands = append(commands, cmd)
+	}
+
+	sort.Slice(
+		commands, func(i, j int) bool {
+			return commands[i].Id() < commands[j].Id()
+		},
+	)
+
+	return commands
+}
+
 // Command returns a command by its ID
 func (registry *CommandsRegistry) Command(id string) (Command, bool) {
 	cmd, ok := registry.commands[id]
@@ -159,12 +174,7 @@ func Run(
 	_ = availableCommands.Register(
 		&HelpCommand{
 			CommandWithoutFlags{},
-			slices.Collect(
-				maps.Values(
-					availableCommands.
-						Commands(),
-				),
-			),
+			availableCommands.OrderedCommands(),
 		},
 	)
 

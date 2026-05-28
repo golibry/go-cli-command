@@ -172,6 +172,25 @@ func TestItCanRegisterMultipleCommandsAndExposeACopyOfThem(t *testing.T) {
 	}
 }
 
+func TestRegistryCanReturnCommandsOrderedById(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	_ = registry.Register(&MockCommand{id: "zebra", description: "Zebra command"})
+	_ = registry.Register(&MockCommand{id: "alpha", description: "Alpha command"})
+	_ = registry.Register(&MockCommand{id: "middle", description: "Middle command"})
+
+	commands := registry.OrderedCommands()
+	if len(commands) != 3 {
+		t.Fatalf("OrderedCommands() returned %d commands, want 3", len(commands))
+	}
+
+	wantIds := []string{"alpha", "middle", "zebra"}
+	for i, wantId := range wantIds {
+		if commands[i].Id() != wantId {
+			t.Errorf("OrderedCommands()[%d].Id() = %s, want %s", i, commands[i].Id(), wantId)
+		}
+	}
+}
+
 func TestRegistryAllowsToFindACommandById(t *testing.T) {
 	registry := CommandsRegistry{commands: make(map[string]Command)}
 	cmd := &MockCommand{id: "test-cmd", description: "Test command"}
@@ -308,6 +327,32 @@ func TestRunReturnsErrorResultForUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "does not exist") {
 		t.Errorf("Run() output should contain 'does not exist', got %v", buf.String())
+	}
+}
+
+func TestRunBuildsHelpWithCommandsOrderedById(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	_ = registry.Register(&MockCommand{id: "zebra", description: "Zebra command"})
+	_ = registry.Register(&MockCommand{id: "alpha", description: "Alpha command"})
+
+	var buf bytes.Buffer
+	result := Run([]string{"help"}, &registry, &buf)
+
+	if result.ExitCode != StatusOk {
+		t.Fatalf("Run() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+
+	output := buf.String()
+	alphaIndex := strings.Index(output, "alpha")
+	zebraIndex := strings.Index(output, "zebra")
+	if alphaIndex < 0 {
+		t.Fatalf("Run() help output does not contain alpha: %s", output)
+	}
+	if zebraIndex < 0 {
+		t.Fatalf("Run() help output does not contain zebra: %s", output)
+	}
+	if alphaIndex > zebraIndex {
+		t.Errorf("Run() help output listed zebra before alpha: %s", output)
 	}
 }
 
