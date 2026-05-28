@@ -160,6 +160,27 @@ func (registry *CommandsRegistry) Command(id string) (Command, bool) {
 	return cmd, ok
 }
 
+func newDefaultHelpCommand(availableCommands *CommandsRegistry) *HelpCommand {
+	return &HelpCommand{
+		CommandWithoutFlags{},
+		availableCommands.OrderedCommands(),
+	}
+}
+
+func resolveCommand(id string, availableCommands *CommandsRegistry) (Command, bool) {
+	cmd, exists := availableCommands.Command(id)
+	if exists {
+		return cmd, true
+	}
+
+	helpCommand := &HelpCommand{}
+	if id == helpCommand.Id() {
+		return newDefaultHelpCommand(availableCommands), true
+	}
+
+	return nil, false
+}
+
 // Run processes the user input and executes the requested command without exiting the process.
 // By default, it writes to os.Stdout if nil is provided for the io.Writer argument.
 func Run(
@@ -171,13 +192,6 @@ func Run(
 		outputWriter = os.Stdout
 	}
 
-	_ = availableCommands.Register(
-		&HelpCommand{
-			CommandWithoutFlags{},
-			availableCommands.OrderedCommands(),
-		},
-	)
-
 	cmdId, cmdArgs := parseCmdInput(args)
 	if cmdId == "" {
 		cmdId = (&HelpCommand{}).Id()
@@ -185,7 +199,7 @@ func Run(
 
 	result := RunResult{CommandID: cmdId, ExitCode: StatusOk}
 	var cmdErr error
-	cmd, exists := availableCommands.Command(cmdId)
+	cmd, exists := resolveCommand(cmdId, availableCommands)
 	if !exists {
 		cmdErr = fmt.Errorf("The command %s does not exist\n", cmdId)
 	} else {

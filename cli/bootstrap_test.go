@@ -356,6 +356,47 @@ func TestRunBuildsHelpWithCommandsOrderedById(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotRegisterDefaultHelpCommandInRegistry(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	_ = registry.Register(&MockCommand{id: "test-cmd", description: "Test command"})
+
+	var buf bytes.Buffer
+	result := Run([]string{"help"}, &registry, &buf)
+
+	if result.ExitCode != StatusOk {
+		t.Fatalf("Run() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+
+	if _, exists := registry.Command("help"); exists {
+		t.Error("Run() registered the default help command in the caller registry")
+	}
+}
+
+func TestRunBuildsDefaultHelpFromCurrentRegistryState(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	_ = registry.Register(&MockCommand{id: "alpha", description: "Alpha command"})
+
+	var buf bytes.Buffer
+	result := Run([]string{"help"}, &registry, &buf)
+	if result.ExitCode != StatusOk {
+		t.Fatalf("Run() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+	if !strings.Contains(buf.String(), "alpha") {
+		t.Fatalf("Run() help output does not contain alpha: %s", buf.String())
+	}
+
+	_ = registry.Register(&MockCommand{id: "zebra", description: "Zebra command"})
+	buf.Reset()
+	result = Run([]string{"help"}, &registry, &buf)
+
+	if result.ExitCode != StatusOk {
+		t.Fatalf("Run() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+	if !strings.Contains(buf.String(), "zebra") {
+		t.Errorf("Run() help output does not contain command registered after first run: %s", buf.String())
+	}
+}
+
 // TestBootstrap tests the Bootstrap function
 func TestItCanBootstrapCliApp(t *testing.T) {
 	registry := CommandsRegistry{commands: make(map[string]Command)}
