@@ -6,18 +6,46 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/golibry/go-fs"
-	"github.com/golibry/go-fs/filelock"
 	"io"
 	"path/filepath"
 	"regexp"
+	"time"
+
+	"github.com/golibry/go-fs"
+	"github.com/golibry/go-fs/filelock"
 )
 
 var CommandLocked = errors.New("command is locked, skipping execution")
 
+type LockedBehavior int
+
+const (
+	FailWhenLocked LockedBehavior = iota
+	SkipWhenLocked
+)
+
+type LockOptions struct {
+	LockFileDirPath string
+	LockName        string
+	Timeout         time.Duration
+	WhenLocked      LockedBehavior
+}
+
 func normalizeCommandId(id string) string {
 	var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 	return nonAlphanumericRegex.ReplaceAllString(id, "-")
+}
+
+func lockFilePath(lockFileDirPath string, lockName string) string {
+	idHash := md5.Sum([]byte(lockName))
+	return filepath.Join(
+		lockFileDirPath,
+		fmt.Sprintf(
+			"go-cli-command-%s-%s.lock",
+			normalizeCommandId(lockName),
+			hex.EncodeToString(idHash[:]),
+		),
+	)
 }
 
 // FsLockableCommand is a helper struct that implements the locking mechanism
@@ -28,6 +56,9 @@ type FsLockableCommand struct {
 
 	// The lock file
 	fileLock filelock.FileLock
+
+	lockTimeout time.Duration
+	whenLocked  LockedBehavior
 }
 
 // NewLockableCommand creates a new FsLockableCommand for the given command.
@@ -46,18 +77,32 @@ func NewLockableCommandWithLockName(
 	lockFileDirPath string,
 	lockName string,
 ) *FsLockableCommand {
-	idHash := md5.Sum([]byte(lockName))
-	lockFilePath := filepath.Join(
-		lockFileDirPath,
-		fmt.Sprintf(
-			"go-cli-command-%s-%s.lock",
-			normalizeCommandId(lockName),
-			hex.EncodeToString(idHash[:]),
-		),
+	return NewLockableCommandWithOptions(
+		cmd,
+		LockOptions{
+			LockFileDirPath: lockFileDirPath,
+			LockName:        lockName,
+			WhenLocked:      FailWhenLocked,
+		},
 	)
+}
+
+// NewLockableCommandWithOptions creates a new FsLockableCommand for the given command,
+// with configurable lock name, timeout, and behavior when the lock is already held.
+func NewLockableCommandWithOptions(
+	cmd Command,
+	options LockOptions,
+) *FsLockableCommand {
+	lockName := options.LockName
+	if lockName == "" {
+		lockName = cmd.Id()
+	}
+
 	return &FsLockableCommand{
-		Command:  cmd,
-		fileLock: fs.New(lockFilePath),
+		Command:     cmd,
+		fileLock:    fs.New(lockFilePath(options.LockFileDirPath, lockName)),
+		lockTimeout: options.Timeout,
+		whenLocked:  options.WhenLocked,
 	}
 }
 
@@ -96,25 +141,35 @@ func (l *FsLockableCommand) Exec(stdWriter io.Writer) error {
 
 		// Execute the wrapped command
 		return l.Command.Exec(stdWriter)
-	} else {
-		return CommandLocked
 	}
+
+	if l.whenLocked == SkipWhenLocked {
+		return nil
+	}
+
+	return CommandLocked
 }
 
 // Lock acquires both the in-memory mutex and the file lock.
 // If the lock cannot be acquired, it returns an error.
 func (l *FsLockableCommand) Lock() (bool, error) {
-	err := l.fileLock.Lock()
+	var err error
+	if l.lockTimeout > 0 {
+		err = l.fileLock.LockWithTimeout(l.lockTimeout)
+	} else {
+		err = l.fileLock.Lock()
+	}
+
 	if err != nil {
-		if errors.Is(err, filelock.ErrLockHeld) {
+		if errors.Is(err, filelock.ErrLockHeld) || errors.Is(err, filelock.ErrTimeout) {
 			return false, nil
-		} else {
-			return false, fmt.Errorf(
-				"failed to acquire lock for command %s: %w",
-				l.Id(),
-				err,
-			)
 		}
+
+		return false, fmt.Errorf(
+			"failed to acquire lock for command %s: %w",
+			l.Id(),
+			err,
+		)
 	}
 
 	return true, nil

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"testing"
@@ -16,6 +17,7 @@ type MockLockableCommand struct {
 	description string
 	execFunc    func() error
 	executed    bool
+	executions  int
 }
 
 func (m *MockLockableCommand) Id() string {
@@ -28,6 +30,7 @@ func (m *MockLockableCommand) Description() string {
 
 func (m *MockLockableCommand) Exec(_ io.Writer) error {
 	m.executed = true
+	m.executions++
 	if m.execFunc != nil {
 		return m.execFunc()
 	}
@@ -181,5 +184,125 @@ func TestLockableCommandHelper_ConcurrentExecution(t *testing.T) {
 	// The second execution should fail with a lock error
 	if err2 == nil {
 		t.Fatalf("Expected second execution to fail, but it succeeded")
+	}
+}
+
+func TestLockableCommandHelper_CanSkipWhenLocked(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lockable-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func(path string) {
+		_ = os.RemoveAll(path)
+	}(tempDir)
+
+	lockName := "skip-command"
+	firstCmd := &MockLockableCommand{
+		id:          "slow-command",
+		description: "Slow command for testing skip when locked",
+		execFunc: func() error {
+			time.Sleep(100 * time.Millisecond)
+			return nil
+		},
+	}
+	secondCmd := &MockLockableCommand{
+		id:          "skipped-command",
+		description: "Skipped command",
+	}
+
+	first := NewLockableCommandWithLockName(firstCmd, tempDir, lockName)
+	second := NewLockableCommandWithOptions(
+		secondCmd,
+		LockOptions{
+			LockFileDirPath: tempDir,
+			LockName:        lockName,
+			WhenLocked:      SkipWhenLocked,
+		},
+	)
+
+	var firstErr error
+	var firstBuf bytes.Buffer
+	done := make(chan bool)
+	go func() {
+		firstErr = first.Exec(&firstBuf)
+		done <- true
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	var secondBuf bytes.Buffer
+	secondErr := second.Exec(&secondBuf)
+	<-done
+
+	if firstErr != nil {
+		t.Fatalf("First execution failed: %v", firstErr)
+	}
+	if secondErr != nil {
+		t.Fatalf("Second execution returned error: %v", secondErr)
+	}
+	if secondCmd.executed {
+		t.Fatal("Second command executed even though the lock was held")
+	}
+}
+
+func TestLockableCommandHelper_CanUseLockTimeout(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lockable-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer func(path string) {
+		_ = os.RemoveAll(path)
+	}(tempDir)
+
+	lockName := "timeout-command"
+	firstCmd := &MockLockableCommand{
+		id:          "slow-command",
+		description: "Slow command for testing timeout",
+		execFunc: func() error {
+			time.Sleep(100 * time.Millisecond)
+			return nil
+		},
+	}
+	secondCmd := &MockLockableCommand{
+		id:          "timeout-command",
+		description: "Timeout command",
+	}
+
+	first := NewLockableCommandWithLockName(firstCmd, tempDir, lockName)
+	second := NewLockableCommandWithOptions(
+		secondCmd,
+		LockOptions{
+			LockFileDirPath: tempDir,
+			LockName:        lockName,
+			Timeout:         20 * time.Millisecond,
+			WhenLocked:      FailWhenLocked,
+		},
+	)
+
+	var firstErr error
+	var firstBuf bytes.Buffer
+	done := make(chan bool)
+	go func() {
+		firstErr = first.Exec(&firstBuf)
+		done <- true
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	var secondBuf bytes.Buffer
+	secondErr := second.Exec(&secondBuf)
+	<-done
+
+	if firstErr != nil {
+		t.Fatalf("First execution failed: %v", firstErr)
+	}
+	if secondErr == nil {
+		t.Fatal("Expected second execution to fail when lock timeout expires")
+	}
+	if !errors.Is(secondErr, CommandLocked) {
+		t.Fatalf("Second execution error = %v, want CommandLocked", secondErr)
+	}
+	if secondCmd.executed {
+		t.Fatal("Second command executed even though lock timeout expired")
 	}
 }
