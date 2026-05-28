@@ -15,6 +15,13 @@ import (
 const StatusOk = 0
 const StatusErr = 1
 
+// RunResult describes the outcome of processing one CLI invocation.
+type RunResult struct {
+	CommandID string
+	ExitCode  int
+	Err       error
+}
+
 // Command interface defines the methods that a command must implement
 type Command interface {
 	Id() string
@@ -138,21 +145,15 @@ func (registry *CommandsRegistry) Command(id string) (Command, bool) {
 	return cmd, ok
 }
 
-// Bootstrap Will bootstrap everything needed for the user CLI request. Will process the
-// user input and run the requested command. By default, will output to os.Stdout if
-// nil is provided for the io.Writer argument.
-func Bootstrap(
+// Run processes the user input and executes the requested command without exiting the process.
+// By default, it writes to os.Stdout if nil is provided for the io.Writer argument.
+func Run(
 	args []string,
 	availableCommands *CommandsRegistry,
 	outputWriter io.Writer,
-	processExit func(code int),
-) {
+) RunResult {
 	if outputWriter == nil {
 		outputWriter = os.Stdout
-	}
-
-	if processExit == nil {
-		processExit = os.Exit
 	}
 
 	_ = availableCommands.Register(
@@ -172,6 +173,7 @@ func Bootstrap(
 		cmdId = (&HelpCommand{}).Id()
 	}
 
+	result := RunResult{CommandID: cmdId, ExitCode: StatusOk}
 	var cmdErr error
 	cmd, exists := availableCommands.Command(cmdId)
 	if !exists {
@@ -196,9 +198,27 @@ func Bootstrap(
 				reflect.TypeOf(outputWriter),
 			)
 		}
-		processExit(StatusErr)
-		return
+		result.ExitCode = StatusErr
+		result.Err = cmdErr
+		return result
 	}
 
-	processExit(StatusOk)
+	return result
+}
+
+// Bootstrap Will bootstrap everything needed for the user CLI request. Will process the
+// user input, run the requested command, and call processExit with the resulting status code.
+// By default, it will output to os.Stdout if nil is provided for the io.Writer argument.
+func Bootstrap(
+	args []string,
+	availableCommands *CommandsRegistry,
+	outputWriter io.Writer,
+	processExit func(code int),
+) {
+	if processExit == nil {
+		processExit = os.Exit
+	}
+
+	result := Run(args, availableCommands, outputWriter)
+	processExit(result.ExitCode)
 }

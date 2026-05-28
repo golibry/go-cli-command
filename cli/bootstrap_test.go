@@ -262,6 +262,55 @@ func TestItCanRunCommand(t *testing.T) {
 	}
 }
 
+func TestItCanRunCliAppWithoutExitingProcess(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	testCmd := &MockCommand{
+		id:          "test-cmd",
+		description: "Test command",
+		execFunc: func(writer io.Writer) error {
+			_, _ = fmt.Fprint(writer, "Test command executed")
+			return nil
+		},
+	}
+	_ = registry.Register(testCmd)
+
+	var buf bytes.Buffer
+	result := Run([]string{"test-cmd"}, &registry, &buf)
+
+	if result.CommandID != "test-cmd" {
+		t.Errorf("Run() CommandID = %v, want test-cmd", result.CommandID)
+	}
+	if result.ExitCode != StatusOk {
+		t.Errorf("Run() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+	if result.Err != nil {
+		t.Errorf("Run() Err = %v, want nil", result.Err)
+	}
+	if !strings.Contains(buf.String(), "Test command executed") {
+		t.Errorf("Run() output = %v, want command output", buf.String())
+	}
+}
+
+func TestRunReturnsErrorResultForUnknownCommand(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+
+	var buf bytes.Buffer
+	result := Run([]string{"missing-cmd"}, &registry, &buf)
+
+	if result.CommandID != "missing-cmd" {
+		t.Errorf("Run() CommandID = %v, want missing-cmd", result.CommandID)
+	}
+	if result.ExitCode != StatusErr {
+		t.Errorf("Run() ExitCode = %v, want %v", result.ExitCode, StatusErr)
+	}
+	if result.Err == nil {
+		t.Error("Run() Err = nil, want error")
+	}
+	if !strings.Contains(buf.String(), "does not exist") {
+		t.Errorf("Run() output should contain 'does not exist', got %v", buf.String())
+	}
+}
+
 // TestBootstrap tests the Bootstrap function
 func TestItCanBootstrapCliApp(t *testing.T) {
 	registry := CommandsRegistry{commands: make(map[string]Command)}
