@@ -16,9 +16,59 @@ const StatusErr = 1
 
 var (
 	ErrCommandAlreadyRegistered = errors.New("command already registered")
+	ErrCommandNotFound          = errors.New("command not found")
 	ErrInvalidCommand           = errors.New("invalid command")
 	ErrInvalidCommandsRegistry  = errors.New("invalid commands registry")
 )
+
+// ExitCoder can be implemented by errors that should control the process exit code.
+type ExitCoder interface {
+	ExitCode() int
+}
+
+// ErrorWithExitCode wraps an error with a custom process exit code.
+type ErrorWithExitCode struct {
+	Err  error
+	Code int
+}
+
+func (e *ErrorWithExitCode) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("exit code %d", e.Code)
+	}
+	return e.Err.Error()
+}
+
+func (e *ErrorWithExitCode) Unwrap() error {
+	return e.Err
+}
+
+func (e *ErrorWithExitCode) ExitCode() int {
+	return e.Code
+}
+
+// WithExitCode wraps err with a custom process exit code.
+func WithExitCode(err error, code int) error {
+	if err == nil {
+		return nil
+	}
+	return &ErrorWithExitCode{Err: err, Code: code}
+}
+
+// ExitCodeFromError returns StatusOk for nil, a custom error exit code when provided,
+// or StatusErr for ordinary errors.
+func ExitCodeFromError(err error) int {
+	if err == nil {
+		return StatusOk
+	}
+
+	var exitCoder ExitCoder
+	if errors.As(err, &exitCoder) && exitCoder.ExitCode() > StatusOk {
+		return exitCoder.ExitCode()
+	}
+
+	return StatusErr
+}
 
 // RunResult describes the outcome of processing one CLI invocation.
 type RunResult struct {
@@ -174,7 +224,7 @@ func (registry *CommandsRegistry) Register(cmd Command) error {
 	return nil
 }
 
-// Commands returns a copy of all registered commands
+// Commands return a copy of all registered commands
 func (registry *CommandsRegistry) Commands() map[string]Command {
 	if registry == nil {
 		return map[string]Command{}
@@ -258,7 +308,7 @@ func Run(
 	var cmdErr error
 	cmd, exists := resolveCommand(cmdId, availableCommands)
 	if !exists {
-		cmdErr = fmt.Errorf("The command %s does not exist\n", cmdId)
+		cmdErr = fmt.Errorf("%w: The command %s does not exist", ErrCommandNotFound, cmdId)
 	} else {
 		cmdErr = runCommand(cmd, cmdArgs, outputWriter)
 	}
@@ -279,7 +329,7 @@ func Run(
 				reflect.TypeOf(outputWriter),
 			)
 		}
-		result.ExitCode = StatusErr
+		result.ExitCode = ExitCodeFromError(cmdErr)
 		result.Err = cmdErr
 		return result
 	}

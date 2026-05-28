@@ -385,6 +385,117 @@ func TestItCanRunCliAppWithoutExitingProcess(t *testing.T) {
 	}
 }
 
+func TestExitCodeFromError(t *testing.T) {
+	plainErr := errors.New("plain error")
+
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: StatusOk,
+		},
+		{
+			name: "plain error",
+			err:  plainErr,
+			want: StatusErr,
+		},
+		{
+			name: "custom exit code",
+			err:  WithExitCode(plainErr, 7),
+			want: 7,
+		},
+		{
+			name: "zero custom exit code falls back to error status",
+			err:  WithExitCode(plainErr, StatusOk),
+			want: StatusErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(
+			tt.name, func(t *testing.T) {
+				got := ExitCodeFromError(tt.err)
+				if got != tt.want {
+					t.Errorf("ExitCodeFromError() = %d, want %d", got, tt.want)
+				}
+			},
+		)
+	}
+}
+
+func TestWithExitCodeWrapsError(t *testing.T) {
+	baseErr := errors.New("base error")
+	err := WithExitCode(baseErr, 9)
+
+	if !errors.Is(err, baseErr) {
+		t.Errorf("WithExitCode() error = %v, want to wrap base error", err)
+	}
+
+	var exitCoder ExitCoder
+	if !errors.As(err, &exitCoder) {
+		t.Fatalf("WithExitCode() error does not implement ExitCoder")
+	}
+	if exitCoder.ExitCode() != 9 {
+		t.Errorf("ExitCode() = %d, want 9", exitCoder.ExitCode())
+	}
+}
+
+func TestRunUsesCustomExitCodeFromCommandError(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	_ = registry.Register(
+		&MockCommand{
+			id:          "custom-exit",
+			description: "Custom exit command",
+			execFunc: func(writer io.Writer) error {
+				return WithExitCode(errors.New("custom failure"), 12)
+			},
+		},
+	)
+
+	var buf bytes.Buffer
+	result := Run([]string{"custom-exit"}, &registry, &buf)
+
+	if result.ExitCode != 12 {
+		t.Errorf("Run() ExitCode = %v, want 12", result.ExitCode)
+	}
+	if result.Err == nil {
+		t.Error("Run() Err = nil, want error")
+	}
+	if !strings.Contains(buf.String(), "custom failure") {
+		t.Errorf("Run() output should contain custom failure, got %v", buf.String())
+	}
+}
+
+func TestBootstrapUsesCustomExitCodeFromCommandError(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	_ = registry.Register(
+		&MockCommand{
+			id:          "custom-exit",
+			description: "Custom exit command",
+			execFunc: func(writer io.Writer) error {
+				return WithExitCode(errors.New("custom failure"), 23)
+			},
+		},
+	)
+
+	var buf bytes.Buffer
+	exitCode := -1
+	Bootstrap(
+		[]string{"custom-exit"},
+		&registry,
+		&buf,
+		func(code int) { exitCode = code },
+	)
+
+	if exitCode != 23 {
+		t.Errorf("Bootstrap() exitCode = %v, want 23", exitCode)
+	}
+}
+
 func TestRunReturnsErrorResultForUnknownCommand(t *testing.T) {
 	registry := CommandsRegistry{commands: make(map[string]Command)}
 
@@ -399,6 +510,9 @@ func TestRunReturnsErrorResultForUnknownCommand(t *testing.T) {
 	}
 	if result.Err == nil {
 		t.Error("Run() Err = nil, want error")
+	}
+	if !errors.Is(result.Err, ErrCommandNotFound) {
+		t.Errorf("Run() Err = %v, want ErrCommandNotFound", result.Err)
 	}
 	if !strings.Contains(buf.String(), "does not exist") {
 		t.Errorf("Run() output should contain 'does not exist', got %v", buf.String())
