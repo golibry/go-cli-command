@@ -1,70 +1,98 @@
 # go-cli-command
 
-A lightweight, flexible framework for building command-line applications in Go. This package 
-provides a simple way to define, register, and execute CLI commands with support for flags and 
-help documentation.  
+A lightweight, flexible framework for building command-line applications in Go. This package
+provides a simple way to define, register, and execute CLI commands with support for flags,
+help documentation, process-safe locking, custom exit codes, and context-aware execution.
+
 Migrated from https://github.com/rsgcata/go-cli-command
 
 ## Features
 
-- Simple, intuitive API for defining CLI commands
+- Simple API for defining CLI commands
 - First-class support for command-line flags with validation
-- Built-in `help` command that lists commands and their flags with nicely wrapped descriptions
-- File-based command locking to prevent concurrent execution (cross-process safe)
+- Built-in `help` command with deterministic command ordering
+- File-based command locking to prevent concurrent execution, with configurable lock behavior
 - Panic-safe command runner with error reporting and non-zero exit codes on failure
+- Optional context-aware command execution via `RunContext` and `ContextCommand`
+- Custom command exit codes via errors that implement `ExitCoder`
 - Flexible output handling via injectable `io.Writer`
 - Minimal dependencies (uses `github.com/golibry/go-fs` for file locking)
 - Small, test-covered core
 
 ## Installation
 
-```bash
-go get github.com/golibry/go-cli-command
-```
+Use `go get github.com/golibry/go-cli-command` from your application module.
 
-## Usage
+## Getting Started
 
-Create command-line applications by:
+Create command-line applications by implementing `Command`, registering commands in a
+`CommandsRegistry`, and executing the registry through `Bootstrap`, `Run`, or `RunContext`.
 
-1. Implementing the `Command` interface for each command
-2. Registering your commands in a `CommandsRegistry`
-3. Bootstrapping the application with the provided arguments
+For runnable code and usage variants, start with:
+
+- [_examples/README.md](_examples/README.md)
+- [_examples/main.go](_examples/main.go)
+
+## Core Components
+
+### Command
+
+The required interface for commands. It provides the command ID, help description, execution
+method, flag definitions, and flag validation.
 
 For commands without flags, embed `CommandWithoutFlags` to avoid boilerplate.
 
-## Documentation
+### ContextCommand
 
-### Core Components
+An optional interface for commands that need cancellation or deadlines. When a command implements
+`ContextCommand`, the runner calls `ExecContext` instead of `Exec`.
 
-#### Command Interface
+Use it for commands that call databases, APIs, queues, or other resources that should respect
+context cancellation.
 
-The `Command` interface defines the methods that a command must implement:
+### CommandsRegistry
 
-- `Id() string`: Unique identifier for the command
-- `Description() string`: Description shown in help
-- `Exec(stdWriter io.Writer) error`: Execute the command
-- `DefineFlags(flagSet *flag.FlagSet)`: Define command-specific flags
-- `ValidateFlags() error`: Validate the parsed flags
+Stores and resolves commands by ID. Registration validates commands and rejects nil commands,
+empty command IDs, whitespace-padded IDs, and duplicate IDs.
 
-#### FsLockableCommand
+It also exposes ordered command retrieval for deterministic help output.
 
-A helper that wraps any `Command` to enforce exclusive execution using a file lock. This ensures only one instance runs at a time, even across processes. When a lock is already held, `Exec` returns the sentinel `CommandLocked` error.
+### Help Command
 
-#### CommandWithoutFlags
+The default `help` command is provided at runtime without mutating the caller's registry. Commands
+are listed in deterministic order by command ID.
 
-For commands that don't need flags, you can embed this struct to avoid implementing empty methods.
+You may register your own `help` command to override the default behavior.
 
-#### CommandsRegistry
+### Run, RunContext, and Bootstrap
 
-Manages the registration and retrieval of commands. Use `NewCommandsRegistry()` to create a new registry and `Register()` to add commands.
+- `Run` executes a command without exiting the process.
+- `RunContext` executes a command without exiting and passes a context to context-aware commands.
+- `Bootstrap` is the main entrypoint helper: it runs the requested command and calls the provided
+  process exit function.
 
-#### Bootstrap Function
+### Exit Codes
 
-The main entry point for your CLI application, which processes arguments, runs commands, and handles output.
+Plain command errors use `StatusErr`. Commands can opt into specific exit codes with errors that
+implement `ExitCoder`, including errors created with `WithExitCode`.
+
+### Locking
+
+`FsLockableCommand` wraps any command with an exclusive file lock. Use it to prevent concurrent
+execution across processes.
+
+The basic constructors fail when the lock is held. The options-based constructor can also skip
+successfully when another process already holds the lock, or wait for a timeout.
 
 ## Examples
 
-For complete, runnable examples (including command implementation, registration, bootstrapping, and locking), see the [_examples](/_examples) directory in this repository.
+The examples folder is the source of truth for practical usage:
+
+- [_examples/README.md](_examples/README.md)
+- [_examples/main.go](_examples/main.go)
+
+It covers basic commands, flags, validation, `Bootstrap`, `Run`, `RunContext`, custom exit codes,
+locking variants, panic recovery, and custom writer capture.
 
 ## License
 
