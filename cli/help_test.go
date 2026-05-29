@@ -34,6 +34,16 @@ func TestItCanDisplayHelpfulInformationAboutAvailableCommands(t *testing.T) {
 	// Check that the output contains expected information
 	output := buf.String()
 
+	if !strings.Contains(output, "Usage:") {
+		t.Errorf("Help output doesn't contain usage section")
+	}
+	if !strings.Contains(output, "<command> [flags]") {
+		t.Errorf("Help output doesn't contain command usage")
+	}
+	if !strings.Contains(output, "Available commands:") {
+		t.Errorf("Help output doesn't contain available commands section")
+	}
+
 	// Check command IDs are in the output
 	if !strings.Contains(output, "help") {
 		t.Errorf("Help output doesn't contain the help command ID")
@@ -60,6 +70,40 @@ func TestItCanDisplayHelpfulInformationAboutAvailableCommands(t *testing.T) {
 	if !strings.Contains(output, "--test-flag") {
 		t.Errorf("Help output doesn't contain flag name")
 	}
+	if !strings.Contains(output, `(default "")`) {
+		t.Errorf("Help output doesn't contain quoted flag default")
+	}
+}
+
+func TestHelpCommandSkipsDuplicateHelpEntry(t *testing.T) {
+	helpCmd := &HelpCommand{
+		availableCommands: []Command{
+			&HelpCommand{},
+			&MockCommand{id: "test-cmd", description: "Test command"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := helpCmd.Exec(&buf)
+	if err != nil {
+		t.Errorf("HelpCommand.Exec() error = %v, want nil", err)
+	}
+
+	helpRows := countCommandRows(buf.String(), "help")
+	if helpRows != 1 {
+		t.Errorf("Help output contains %d help rows, want 1. Output:\n%s", helpRows, buf.String())
+	}
+}
+
+func countCommandRows(output string, commandId string) int {
+	count := 0
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == commandId {
+			count++
+		}
+	}
+	return count
 }
 
 func TestItCanChunkDescription(t *testing.T) {
