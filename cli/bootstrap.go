@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -86,6 +87,12 @@ type Command interface {
 	ValidateFlags() error
 }
 
+// ContextCommand can be implemented by commands that need cancellation or deadlines.
+type ContextCommand interface {
+	Command
+	ExecContext(ctx context.Context, stdWriter io.Writer) error
+}
+
 type LockableCommand interface {
 	Command
 	Lock() (bool, error)
@@ -111,7 +118,12 @@ func setupFlagSet(cmd Command, outputWriter io.Writer) *flag.FlagSet {
 }
 
 // runCommand runs the given command with the provided arguments
-func runCommand(cmd Command, args []string, outputWriter io.Writer) (cmdErr error) {
+func runCommand(
+	ctx context.Context,
+	cmd Command,
+	args []string,
+	outputWriter io.Writer,
+) (cmdErr error) {
 	defer func() {
 		if err := recover(); err != nil {
 			switch v := err.(type) {
@@ -144,7 +156,12 @@ func runCommand(cmd Command, args []string, outputWriter io.Writer) (cmdErr erro
 	}
 
 	// Execute the command
-	if cmdErr = cmd.Exec(outputWriter); cmdErr != nil {
+	if contextCmd, ok := cmd.(ContextCommand); ok {
+		cmdErr = contextCmd.ExecContext(ctx, outputWriter)
+	} else {
+		cmdErr = cmd.Exec(outputWriter)
+	}
+	if cmdErr != nil {
 		return cmdErr
 	}
 
@@ -295,6 +312,21 @@ func Run(
 	availableCommands *CommandsRegistry,
 	outputWriter io.Writer,
 ) RunResult {
+	return RunContext(context.Background(), args, availableCommands, outputWriter)
+}
+
+// RunContext processes the user input and executes the requested command without exiting the process.
+// By default, it writes to os.Stdout if nil is provided for the io.Writer argument.
+func RunContext(
+	ctx context.Context,
+	args []string,
+	availableCommands *CommandsRegistry,
+	outputWriter io.Writer,
+) RunResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if outputWriter == nil {
 		outputWriter = os.Stdout
 	}
@@ -310,7 +342,7 @@ func Run(
 	if !exists {
 		cmdErr = fmt.Errorf("%w: The command %s does not exist", ErrCommandNotFound, cmdId)
 	} else {
-		cmdErr = runCommand(cmd, cmdArgs, outputWriter)
+		cmdErr = runCommand(ctx, cmd, cmdArgs, outputWriter)
 	}
 
 	if cmdErr != nil {

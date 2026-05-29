@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -40,6 +41,26 @@ type MockCommandWithFlags struct {
 	execFunc    func(writer io.Writer) error
 	validateErr error
 	flagSet     *flag.FlagSet
+}
+
+type MockContextCommand struct {
+	MockCommand
+	ctx           context.Context
+	execContext   func(ctx context.Context, writer io.Writer) error
+	execWasCalled bool
+}
+
+func (m *MockContextCommand) Exec(writer io.Writer) error {
+	m.execWasCalled = true
+	return m.MockCommand.Exec(writer)
+}
+
+func (m *MockContextCommand) ExecContext(ctx context.Context, writer io.Writer) error {
+	m.ctx = ctx
+	if m.execContext != nil {
+		return m.execContext(ctx, writer)
+	}
+	return nil
 }
 
 func (m *MockCommandWithFlags) Id() string {
@@ -337,7 +358,7 @@ func TestItCanRunCommand(t *testing.T) {
 		t.Run(
 			tt.name, func(t *testing.T) {
 				var buf bytes.Buffer
-				err := runCommand(tt.cmd, tt.args, &buf)
+				err := runCommand(context.Background(), tt.cmd, tt.args, &buf)
 
 				if (err != nil) != tt.wantErr {
 					t.Errorf("runCommand() error = %v, wantErr %v", err, tt.wantErr)
@@ -353,6 +374,89 @@ func TestItCanRunCommand(t *testing.T) {
 				}
 			},
 		)
+	}
+}
+
+func TestRunContextPassesContextToContextCommand(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	type contextKey string
+	key := contextKey("request-id")
+	ctx := context.WithValue(context.Background(), key, "abc-123")
+	contextCmd := &MockContextCommand{
+		MockCommand: MockCommand{
+			id:          "context-cmd",
+			description: "Context command",
+		},
+		execContext: func(ctx context.Context, writer io.Writer) error {
+			_, _ = fmt.Fprint(writer, ctx.Value(key))
+			return nil
+		},
+	}
+	_ = registry.Register(contextCmd)
+
+	var buf bytes.Buffer
+	result := RunContext(ctx, []string{"context-cmd"}, &registry, &buf)
+
+	if result.ExitCode != StatusOk {
+		t.Fatalf("RunContext() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+	if contextCmd.ctx != ctx {
+		t.Error("RunContext() did not pass provided context to ExecContext")
+	}
+	if contextCmd.execWasCalled {
+		t.Error("RunContext() called Exec on a ContextCommand")
+	}
+	if buf.String() != "abc-123" {
+		t.Errorf("RunContext() output = %q, want abc-123", buf.String())
+	}
+}
+
+func TestRunContextUsesExecForRegularCommand(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	executed := false
+	cmd := &MockCommand{
+		id:          "regular-cmd",
+		description: "Regular command",
+		execFunc: func(writer io.Writer) error {
+			executed = true
+			_, _ = fmt.Fprint(writer, "regular")
+			return nil
+		},
+	}
+	_ = registry.Register(cmd)
+
+	var buf bytes.Buffer
+	result := RunContext(context.Background(), []string{"regular-cmd"}, &registry, &buf)
+
+	if result.ExitCode != StatusOk {
+		t.Fatalf("RunContext() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+	if !executed {
+		t.Error("RunContext() did not call Exec for a regular command")
+	}
+	if buf.String() != "regular" {
+		t.Errorf("RunContext() output = %q, want regular", buf.String())
+	}
+}
+
+func TestRunContextUsesBackgroundWhenContextIsNil(t *testing.T) {
+	registry := CommandsRegistry{commands: make(map[string]Command)}
+	contextCmd := &MockContextCommand{
+		MockCommand: MockCommand{
+			id:          "context-cmd",
+			description: "Context command",
+		},
+	}
+	_ = registry.Register(contextCmd)
+
+	var buf bytes.Buffer
+	result := RunContext(nil, []string{"context-cmd"}, &registry, &buf)
+
+	if result.ExitCode != StatusOk {
+		t.Fatalf("RunContext() ExitCode = %v, want %v", result.ExitCode, StatusOk)
+	}
+	if contextCmd.ctx == nil {
+		t.Error("RunContext() passed nil context to ExecContext")
 	}
 }
 
