@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -128,7 +129,27 @@ func (l *FsLockableCommand) ValidateFlags() error {
 
 // Exec acquires the lock, executes the wrapped command, and then releases the lock.
 func (l *FsLockableCommand) Exec(stdWriter io.Writer) error {
-	locked, err := l.Lock()
+	return l.exec(context.Background(), func() error {
+		return l.Command.Exec(stdWriter)
+	})
+}
+
+// ExecContext uses ctx while acquiring the lock and passes it to context-aware commands.
+// A non-positive lock timeout still performs a non-blocking acquisition.
+func (l *FsLockableCommand) ExecContext(ctx context.Context, stdWriter io.Writer) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return l.exec(ctx, func() error {
+		if cmd, ok := l.Command.(ContextCommand); ok {
+			return cmd.ExecContext(ctx, stdWriter)
+		}
+		return l.Command.Exec(stdWriter)
+	})
+}
+
+func (l *FsLockableCommand) exec(ctx context.Context, run func() error) error {
+	locked, err := l.lock(ctx)
 	if err != nil {
 		return err
 	}
@@ -139,8 +160,10 @@ func (l *FsLockableCommand) Exec(stdWriter io.Writer) error {
 			_ = l.Unlock()
 		}(l)
 
-		// Execute the wrapped command
-		return l.Command.Exec(stdWriter)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return run()
 	}
 
 	if l.whenLocked == SkipWhenLocked {
@@ -153,14 +176,29 @@ func (l *FsLockableCommand) Exec(stdWriter io.Writer) error {
 // Lock acquires both the in-memory mutex and the file lock.
 // If the lock cannot be acquired, it returns an error.
 func (l *FsLockableCommand) Lock() (bool, error) {
-	var err error
-	if l.lockTimeout > 0 {
-		err = l.fileLock.LockWithTimeout(l.lockTimeout)
-	} else {
-		err = l.fileLock.Lock()
+	return l.lock(context.Background())
+}
+
+func (l *FsLockableCommand) lock(ctx context.Context) (bool, error) {
+	err := ctx.Err()
+	if err == nil {
+		if l.lockTimeout > 0 {
+			lockCtx, cancel := context.WithTimeout(ctx, l.lockTimeout)
+			defer cancel()
+			err = l.fileLock.LockContext(lockCtx)
+			// Only the configured lock timeout follows the skip/fail policy.
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				err = filelock.ErrTimeout
+			}
+		} else {
+			err = l.fileLock.Lock()
+		}
 	}
 
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
 		if errors.Is(err, filelock.ErrLockHeld) || errors.Is(err, filelock.ErrTimeout) {
 			return false, nil
 		}
